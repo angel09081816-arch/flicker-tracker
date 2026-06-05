@@ -1,7 +1,6 @@
 --[[
-    RoleInfo Cheat Sheet (Live Hook Version)
-    Hooks into the real ReplicatedStorage modules to display accurate, live role data.
-    Toggle: Right Control (or Tab to match game)
+    Role Cheat Sheet - Button Toggle Version
+    Click the floating button (bottom-right) to open/close the panel.
 ]]
 
 local Players = game:GetService("Players")
@@ -11,12 +10,12 @@ local LocalPlayer = Players.LocalPlayer
 -- ============================================================
 -- CONFIG
 -- ============================================================
-local TOGGLE_KEY = Enum.KeyCode.RightControl
-local USE_TAB_TOGGLE = false -- also toggle with Tab (game's default)
-local SHOW_MY_ROLE_AUTO = true -- auto-display your role when received
+local BUTTON_TEXT = "📋 Roles"  -- text on the toggle button
+local BUTTON_POSITION = "BottomRight"  -- "BottomRight", "BottomLeft", "TopRight", "TopLeft"
+local TOGGLE_KEY = Enum.KeyCode.RightControl  -- backup keyboard toggle (optional)
 
 -- ============================================================
--- COLOR & STYLE
+-- STYLE
 -- ============================================================
 local COLORS = {
     Background = Color3.fromRGB(20, 20, 25),
@@ -28,24 +27,44 @@ local COLORS = {
     Evil = Color3.fromRGB(255, 85, 88),
     Neutral = Color3.fromRGB(197, 197, 197),
     Accent = Color3.fromRGB(100, 130, 255),
+    Button = Color3.fromRGB(60, 60, 80),
+    ButtonHover = Color3.fromRGB(80, 80, 110),
 }
-
 local FONT = Enum.Font.GothamMedium
 local FONT_BOLD = Enum.Font.GothamBold
 
 -- ============================================================
--- FIND GAME MODULES
+-- HELPER
 -- ============================================================
-local function safeRequire(path)
-    local ok, mod = pcall(function()
-        local obj = path
-        for _, name in ipairs({"split"}) do end -- placeholder
-        return require(obj)
-    end)
-    return ok and mod or nil
+local function make(className, props, children)
+    local inst = Instance.new(className)
+    for k, v in pairs(props or {}) do
+        if k ~= "Parent" and k ~= "Children" then
+            pcall(function() inst[k] = v end)
+        end
+    end
+    for _, child in ipairs(children or {}) do
+        child.Parent = inst
+    end
+    return inst
 end
 
--- Try to find the RoleInfo module
+local function getPos(side)
+    local off = 20
+    if side == "BottomRight" then
+        return UDim2.new(1, -100 - off, 1, -50 - off)
+    elseif side == "BottomLeft" then
+        return UDim2.new(0, off, 1, -50 - off)
+    elseif side == "TopRight" then
+        return UDim2.new(1, -100 - off, 0, off)
+    else
+        return UDim2.new(0, off, 0, off)
+    end
+end
+
+-- ============================================================
+-- FIND GAME MODULES
+-- ============================================================
 local function findModule(parent, name, depth)
     depth = depth or 0
     if depth > 5 then return nil end
@@ -62,7 +81,6 @@ local function findModule(parent, name, depth)
 end
 
 local function getRoleInfo()
-    -- Common locations based on deobfuscated code
     local candidates = {
         ReplicatedStorage:FindFirstChild("RoleInfo"),
         ReplicatedStorage:FindFirstChild("Data") and ReplicatedStorage.Data:FindFirstChild("RoleInfo"),
@@ -71,7 +89,7 @@ local function getRoleInfo()
     for _, c in ipairs(candidates) do
         if c then
             local ok, data = pcall(require, c)
-            if ok and type(data) == "table" then return data end
+            if ok and type(data) == "table" and next(data) then return data end
         end
     end
     return nil
@@ -82,6 +100,10 @@ local function getDataController()
         local ok, dc = pcall(require, ReplicatedStorage.DataController)
         if ok then return dc end
     end
+    if ReplicatedStorage:FindFirstChild("Data") and ReplicatedStorage.Data:FindFirstChild("DataController") then
+        local ok, dc = pcall(require, ReplicatedStorage.Data.DataController)
+        if ok then return dc end
+    end
     return nil
 end
 
@@ -89,63 +111,61 @@ local ROLE_INFO = getRoleInfo()
 local DATA_CTRL = getDataController()
 
 if not ROLE_INFO then
-    warn("[RoleCheatSheet] Could not find RoleInfo module. The script will still run with limited functionality.")
+    warn("[RoleCheatSheet] RoleInfo module not found.")
 end
 
 -- ============================================================
--- GET LIVE ROLIST FROM GAME
+-- CLEAN UP OLD GUI
 -- ============================================================
-local currentRolelist = nil
-local myRole = nil
-local myRoleDetails = nil
-
-local function fetchLiveRolelist()
-    if not DATA_CTRL then return nil end
-    local ok, replica = pcall(function()
-        return DATA_CTRL:GetFirstReplicaOfClass("GameData")
-    end)
-    if not ok or not replica then return nil end
-    local data = replica.Data
-    if not data then return nil end
-    return data.Rolelist, #data.Players
-end
+local old = LocalPlayer.PlayerGui:FindFirstChild("RoleCheatSheetGUI")
+if old then old:Destroy() end
 
 -- ============================================================
 -- BUILD GUI
 -- ============================================================
-local function make(className, props, children)
-    local inst = Instance.new(className)
-    for k, v in pairs(props or {}) do
-        if k ~= "Parent" and k ~= "Children" then
-            pcall(function() inst[k] = v end)
-        end
-    end
-    for _, child in ipairs(children or {}) do
-        child.Parent = inst
-    end
-    return inst
-end
-
--- Destroy old GUI if exists
-local old = LocalPlayer.PlayerGui:FindFirstChild("RoleCheatSheetGUI")
-if old then old:Destroy() end
-
 local screenGui = make("ScreenGui", {
     Name = "RoleCheatSheetGUI",
     ResetOnSpawn = false,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
     IgnoreGuiInset = true,
+    DisplayOrder = 999,  -- render on top
 })
 
+-- === TOGGLE BUTTON (always visible) ===
+local toggleButton = make("TextButton", {
+    Name = "ToggleButton",
+    Size = UDim2.new(0, 110, 0, 50),
+    Position = getPos(BUTTON_POSITION),
+    BackgroundColor3 = COLORS.Button,
+    BorderSizePixel = 0,
+    Text = BUTTON_TEXT,
+    TextColor3 = COLORS.Text,
+    Font = FONT_BOLD,
+    TextSize = 16,
+    AutoButtonColor = true,
+    Parent = screenGui,
+})
+make("UICorner", {CornerRadius = UDim.new(0, 10), Parent = toggleButton})
+make("UIStroke", {Color = COLORS.Accent, Thickness = 2, Parent = toggleButton})
+
+-- hover effect
+toggleButton.MouseEnter:Connect(function()
+    toggleButton.BackgroundColor3 = COLORS.ButtonHover
+end)
+toggleButton.MouseLeave:Connect(function()
+    toggleButton.BackgroundColor3 = COLORS.Button
+end)
+
+-- === MAIN PANEL (hidden by default) ===
 local mainFrame = make("Frame", {
     Name = "Main",
     Size = UDim2.new(0, 520, 0, 620),
     Position = UDim2.new(0.5, -260, 0.5, -310),
     BackgroundColor3 = COLORS.Background,
     BorderSizePixel = 0,
-    Visible = true,
-}, {})
-
+    Visible = false,  -- starts hidden
+    Parent = screenGui,
+})
 make("UICorner", {CornerRadius = UDim.new(0, 10), Parent = mainFrame})
 make("UIStroke", {Color = COLORS.Accent, Thickness = 2, Parent = mainFrame})
 
@@ -158,14 +178,20 @@ local titleBar = make("Frame", {
     Parent = mainFrame,
 })
 make("UICorner", {CornerRadius = UDim.new(0, 10), Parent = titleBar})
-make("Frame", {Size = UDim2.new(1, 0, 0.5, 0), Position = UDim2.new(0, 0, 0.5, 0), BackgroundColor3 = COLORS.Header, BorderSizePixel = 0, Parent = titleBar})
+make("Frame", {
+    Size = UDim2.new(1, 0, 0.5, 0),
+    Position = UDim2.new(0, 0, 0.5, 0),
+    BackgroundColor3 = COLORS.Header,
+    BorderSizePixel = 0,
+    Parent = titleBar,
+})
 
-local titleLabel = make("TextLabel", {
+make("TextLabel", {
     Name = "Title",
-    Size = UDim2.new(1, -20, 1, 0),
+    Size = UDim2.new(1, -90, 1, 0),
     Position = UDim2.new(0, 10, 0, 0),
     BackgroundTransparency = 1,
-    Text = "📋  Role Cheat Sheet  (Live Data)",
+    Text = "📋  Role Cheat Sheet",
     TextColor3 = COLORS.Text,
     TextXAlignment = Enum.TextXAlignment.Left,
     Font = FONT_BOLD,
@@ -173,12 +199,28 @@ local titleLabel = make("TextLabel", {
     Parent = titleBar,
 })
 
-local statusLabel = make("TextLabel", {
+-- Close button (X) in title bar
+local closeBtn = make("TextButton", {
+    Name = "Close",
+    Size = UDim2.new(0, 30, 0, 30),
+    Position = UDim2.new(1, -35, 0, 5),
+    BackgroundColor3 = COLORS.Section,
+    BorderSizePixel = 0,
+    Text = "X",
+    TextColor3 = COLORS.Evil,
+    Font = FONT_BOLD,
+    TextSize = 16,
+    AutoButtonColor = true,
+    Parent = titleBar,
+})
+make("UICorner", {CornerRadius = UDim.new(0, 6), Parent = closeBtn})
+
+make("TextLabel", {
     Name = "Status",
     Size = UDim2.new(1, -20, 0, 20),
     Position = UDim2.new(0, 10, 0, 42),
     BackgroundTransparency = 1,
-    Text = ROLE_INFO and "✓ Hooked into live game data" or "⚠ Using fallback data",
+    Text = ROLE_INFO and "✓ Hooked into live game data" or "⚠ RoleInfo module not found",
     TextColor3 = ROLE_INFO and COLORS.Good or COLORS.Evil,
     TextXAlignment = Enum.TextXAlignment.Left,
     Font = FONT,
@@ -199,8 +241,7 @@ local function makeTab(name, color, order)
     local btn = make("TextButton", {
         Name = name,
         Size = UDim2.new(0.33, -4, 1, 0),
-        Position = UDim2.new((order - 1) * 0.33 + 2 * (order > 1 and 1 or 0) / 100, 0, 0, 0),
-        AnchorPoint = Vector2.new(0, 0),
+        Position = UDim2.new(0, (order - 1) * (1/3) * 100 + (order - 1) * 2, 0, 0),
         BackgroundColor3 = COLORS.Section,
         BorderSizePixel = 0,
         Text = name,
@@ -231,22 +272,20 @@ local contentFrame = make("ScrollingFrame", {
     AutomaticCanvasSize = Enum.AutomaticSize.Y,
     Parent = mainFrame,
 })
-
-local contentLayout = make("UIListLayout", {
+make("UIListLayout", {
     SortOrder = Enum.SortOrder.LayoutOrder,
     Padding = UDim.new(0, 6),
     Parent = contentFrame,
 })
 
 -- ============================================================
--- RENDER ROLES
+-- RENDER
 -- ============================================================
-local currentTab = "Good"
-local roleButtons = {}
-
 local function clearContent()
     for _, c in ipairs(contentFrame:GetChildren()) do
-        if c:IsA("Frame") or c:IsA("TextButton") then c:Destroy() end
+        if c:IsA("Frame") or c:IsA("TextButton") or c:IsA("TextLabel") then
+            c:Destroy()
+        end
     end
 end
 
@@ -262,21 +301,21 @@ local function getSideColor(side)
     else return COLORS.Neutral end
 end
 
-local function formatList(arr)
-    if not arr or #arr == 0 then return "" end
-    local parts = {}
-    for _, v in ipairs(arr) do
-        if type(v) == "string" then
-            table.insert(parts, "• " .. v)
-        elseif type(v) == "table" then
-            local txt = v[1] or ""
-            table.insert(parts, "• " .. txt)
-        end
-    end
-    return table.concat(parts, "\n")
+local currentRolelist = nil
+local playerCount = nil
+
+local function fetchLiveRolelist()
+    if not DATA_CTRL then return nil, nil end
+    local ok, replica = pcall(function()
+        return DATA_CTRL:GetFirstReplicaOfClass("GameData")
+    end)
+    if not ok or not replica then return nil, nil end
+    local data = replica.Data
+    if not data then return nil, nil end
+    return data.Rolelist, #data.Players
 end
 
-local function createRoleCard(roleName, roleData)
+local function createRoleCard(roleName, roleData, order)
     local sideColor = getSideColor(roleData.Side)
     local amountText = (roleData.Amount and roleData.Amount > 1) and (" x" .. tostring(roleData.Amount)) or ""
     
@@ -288,51 +327,29 @@ local function createRoleCard(roleName, roleData)
         BorderSizePixel = 0,
         Text = "",
         AutoButtonColor = true,
-        LayoutOrder = #contentFrame:GetChildren(),
+        LayoutOrder = order or 100,
         Parent = contentFrame,
     })
     make("UICorner", {CornerRadius = UDim.new(0, 8), Parent = card})
     make("UIStroke", {Color = sideColor, Thickness = 1, Transparency = 0.5, Parent = card})
     
-    local header = make("Frame", {
-        Name = "Header",
-        Size = UDim2.new(1, 0, 0, 32),
-        BackgroundTransparency = 1,
-        Parent = card,
-    })
-    
     make("TextLabel", {
-        Size = UDim2.new(1, -10, 1, 0),
-        Position = UDim2.new(0, 10, 0, 0),
+        Size = UDim2.new(1, -20, 0, 32),
+        Position = UDim2.new(0, 10, 0, 4),
         BackgroundTransparency = 1,
         Text = string.format("%s %s%s", roleData.Emoji or "❓", roleName, amountText),
         TextColor3 = sideColor,
         TextXAlignment = Enum.TextXAlignment.Left,
         Font = FONT_BOLD,
-        TextSize = 14,
-        Parent = header,
-    })
-    
-    local info = roleData.Info or {}
-    local body = make("TextLabel", {
-        Name = "Body",
-        Size = UDim2.new(1, -20, 0, 0),
-        Position = UDim2.new(0, 10, 0, 32),
-        AutomaticSize = Enum.AutomaticSize.Y,
-        BackgroundTransparency = 1,
-        TextWrapped = true,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        TextYAlignment = Enum.TextYAlignment.Top,
-        Font = FONT,
-        TextSize = 12,
-        TextColor3 = COLORS.Text,
+        TextSize = 15,
         Parent = card,
     })
     
+    local info = roleData.Info or {}
     local lines = {}
     for _, key in ipairs({"Goal", "Abilities", "Details", "Behavior"}) do
         if info[key] and #info[key] > 0 then
-            table.insert(lines, "<font color='#" .. COLORS.Muted:ToHex() .. "'>[" .. key .. "]</font>")
+            table.insert(lines, "<font color='#" .. COLORS.Muted:ToHex():sub(1,6) .. "'>[" .. key .. "]</font>")
             for _, item in ipairs(info[key]) do
                 local txt = type(item) == "string" and item or (item[1] or "")
                 table.insert(lines, "  • " .. txt)
@@ -340,21 +357,108 @@ local function createRoleCard(roleName, roleData)
             table.insert(lines, "")
         end
     end
-    body.Text = table.concat(lines, "\n")
     
-    -- Padding at bottom
-    make("UIPadding", {
-        PaddingBottom = UDim.new(0, 8),
+    make("TextLabel", {
+        Size = UDim2.new(1, -20, 0, 0),
+        Position = UDim2.new(0, 10, 0, 36),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundTransparency = 1,
+        Text = table.concat(lines, "\n"),
+        TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top,
+        Font = FONT,
+        TextSize = 12,
+        TextColor3 = COLORS.Text,
+        RichText = true,
         Parent = card,
     })
     
-    return card
+    make("UIPadding", {
+        PaddingBottom = UDim.new(0, 10),
+        Parent = card,
+    })
+end
+
+local function renderLiveRolelist(orderStart)
+    if not currentRolelist then return orderStart end
+    -- Header
+    local header = make("Frame", {
+        Name = "LiveHeader",
+        Size = UDim2.new(1, 0, 0, 32),
+        BackgroundColor3 = COLORS.Header,
+        BorderSizePixel = 0,
+        LayoutOrder = orderStart,
+        Parent = contentFrame,
+    })
+    make("UICorner", {CornerRadius = UDim.new(0, 6), Parent = header})
+    make("TextLabel", {
+        Size = UDim2.new(1, -20, 1, 0),
+        Position = UDim2.new(0, 10, 0, 0),
+        BackgroundTransparency = 1,
+        Text = string.format("🎮 Current Game (%d players)", playerCount or 0),
+        TextColor3 = COLORS.Accent,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        Font = FONT_BOLD,
+        TextSize = 13,
+        Parent = header,
+    })
+    orderStart = orderStart + 1
+    
+    -- Show actual rolelist entries (respecting the "fewer players than rolelist" rule)
+    for i, roles in ipairs(currentRolelist) do
+        if playerCount and playerCount < i then break end
+        -- Twin → Survivor rule
+        local displayRoles = {}
+        for _, r in ipairs(roles) do
+            if r == "Twin" and playerCount and playerCount <= #currentRolelist then
+                table.insert(displayRoles, "Survivor")
+            else
+                table.insert(displayRoles, r)
+            end
+        end
+        
+        local entry = make("TextLabel", {
+            Size = UDim2.new(1, 0, 0, 26),
+            BackgroundColor3 = COLORS.Section,
+            BorderSizePixel = 0,
+            Text = "  Slot " .. i .. ": " .. table.concat(displayRoles, " + "),
+            TextColor3 = COLORS.Text,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Font = FONT,
+            TextSize = 12,
+            LayoutOrder = orderStart,
+            Parent = contentFrame,
+        })
+        make("UICorner", {CornerRadius = UDim.new(0, 4), Parent = entry})
+        orderStart = orderStart + 1
+    end
+    
+    -- Survivor filler
+    if playerCount and currentRolelist and playerCount > #currentRolelist then
+        local fillers = playerCount - #currentRolelist
+        local entry = make("TextLabel", {
+            Size = UDim2.new(1, 0, 0, 26),
+            BackgroundColor3 = COLORS.Section,
+            BorderSizePixel = 0,
+            Text = "  Slot " .. (#currentRolelist + 1) .. ": Survivor x" .. fillers,
+            TextColor3 = COLORS.Good,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Font = FONT,
+            TextSize = 12,
+            LayoutOrder = orderStart,
+            Parent = contentFrame,
+        })
+        make("UICorner", {CornerRadius = UDim.new(0, 4), Parent = entry})
+    end
+    
+    return orderStart + 1
 end
 
 local function renderTab(side)
     clearContent()
     if not ROLE_INFO then
-        local lbl = make("TextLabel", {
+        make("TextLabel", {
             Size = UDim2.new(1, 0, 0, 100),
             BackgroundTransparency = 1,
             Text = "RoleInfo module not found.\nGame data unavailable.",
@@ -367,126 +471,76 @@ local function renderTab(side)
         return
     end
     
-    for roleName, roleData in pairs(ROLE_INFO) do
-        if type(roleData) == "table" and roleData.Side == side then
-            createRoleCard(roleName, roleData)
-        end
+    -- Try to get live rolelist
+    currentRolelist, playerCount = fetchLiveRolelist()
+    
+    local order = 1
+    
+    -- Show live rolelist at top
+    if currentRolelist and side == "Good" then
+        order = renderLiveRolelist(order)
     end
     
-    -- Add live rolelist summary if available
-    if currentRolelist then
-        make("Frame", {
-            Size = UDim2.new(1, 0, 0, 0),
-            AutomaticSize = Enum.AutomaticSize.Y,
-            BackgroundColor3 = COLORS.Header,
-            BorderSizePixel = 0,
-            LayoutOrder = 9999,
-            Parent = contentFrame,
-        })
+    -- Show all roles on that side
+    -- Collect and sort
+    local roleList = {}
+    for roleName, roleData in pairs(ROLE_INFO) do
+        if type(roleData) == "table" and roleData.Side == side then
+            table.insert(roleList, {roleName, roleData})
+        end
+    end
+    table.sort(roleList, function(a, b) return a[1] < b[1] end)
+    
+    for _, entry in ipairs(roleList) do
+        createRoleCard(entry[1], entry[2], order)
+        order = order + 1
     end
 end
 
 goodTab.MouseButton1Click:Connect(function()
-    currentTab = "Good"
     highlightTab(goodTab)
     renderTab("Good")
 end)
 evilTab.MouseButton1Click:Connect(function()
-    currentTab = "Evil"
     highlightTab(evilTab)
     renderTab("Evil")
 end)
 neutralTab.MouseButton1Click:Connect(function()
-    currentTab = "Neutral"
     highlightTab(neutralTab)
     renderTab("Neutral")
 end)
 
 -- ============================================================
--- LIVE ROLIST DISPLAY
--- ============================================================
-local function showLiveRolelist()
-    local rolelist, playerCount = fetchLiveRolelist()
-    if not rolelist then return end
-    currentRolelist = rolelist
-    
-    -- Header for live rolelist
-    local header = make("Frame", {
-        Name = "LiveHeader",
-        Size = UDim2.new(1, 0, 0, 30),
-        BackgroundColor3 = COLORS.Header,
-        BorderSizePixel = 0,
-        LayoutOrder = 0,
-        Parent = contentFrame,
-    })
-    make("UICorner", {CornerRadius = UDim.new(0, 6), Parent = header})
-    make("TextLabel", {
-        Size = UDim2.new(1, -10, 1, 0),
-        Position = UDim2.new(0, 10, 0, 0),
-        BackgroundTransparency = 1,
-        Text = string.format("🎮 Current Game (%d players)", playerCount or 0),
-        TextColor3 = COLORS.Accent,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        Font = FONT_BOLD,
-        TextSize = 13,
-        Parent = header,
-    })
-    
-    -- Sort rolelist entries
-    local entries = {}
-    for i, roles in ipairs(rolelist) do
-        if playerCount and playerCount < i then break end
-        table.insert(entries, {i, roles})
-    end
-    table.sort(entries, function(a, b) return a[1] < b[1] end)
-    
-    for _, entry in ipairs(entries) do
-        local slot, roles = entry[1], entry[2]
-        local names = {}
-        for _, r in ipairs(roles) do
-            table.insert(names, r)
-        end
-        local frame = make("TextLabel", {
-            Size = UDim2.new(1, 0, 0, 24),
-            BackgroundColor3 = COLORS.Section,
-            BorderSizePixel = 0,
-            Text = "  Slot " .. slot .. ": " .. table.concat(names, " + "),
-            TextColor3 = COLORS.Text,
-            TextXAlignment = Enum.TextXAlignment.Left,
-            Font = FONT,
-            TextSize = 12,
-            LayoutOrder = slot,
-            Parent = contentFrame,
-        })
-        make("UICorner", {CornerRadius = UDim.new(0, 4), Parent = frame})
-    end
-end
-
--- ============================================================
 -- MY ROLE NOTIFICATION
 -- ============================================================
+local myRole = nil
+local myRoleDetails = nil
+
 local function showMyRoleNotification()
-    if not myRole or not SHOW_MY_ROLE_AUTO then return end
-    
-    local roleData = ROLE_INFO and ROLE_INFO[myRole]
+    if not myRole or not ROLE_INFO then return end
+    local roleData = ROLE_INFO[myRole]
     if not roleData then return end
+    
+    -- Remove old notification
+    local old = screenGui:FindFirstChild("MyRoleNotif")
+    if old then old:Destroy() end
     
     local notif = make("Frame", {
         Name = "MyRoleNotif",
-        Size = UDim2.new(0, 300, 0, 80),
-        Position = UDim2.new(1, -310, 0, 10),
+        Size = UDim2.new(0, 320, 0, 90),
+        Position = UDim2.new(0.5, -160, 0, 20),
         BackgroundColor3 = COLORS.Header,
         BorderSizePixel = 0,
         Parent = screenGui,
     })
-    make("UICorner", {CornerRadius = UDim.new(0, 8), Parent = notif})
+    make("UICorner", {CornerRadius = UDim.new(0, 10), Parent = notif})
     make("UIStroke", {Color = getSideColor(roleData.Side), Thickness = 2, Parent = notif})
     
     make("TextLabel", {
-        Size = UDim2.new(1, -20, 0, 30),
+        Size = UDim2.new(1, -20, 0, 25),
         Position = UDim2.new(0, 10, 0, 8),
         BackgroundTransparency = 1,
-        Text = "🎭 Your Role",
+        Text = "🎭 Your Role Was Revealed",
         TextColor3 = COLORS.Muted,
         TextXAlignment = Enum.TextXAlignment.Left,
         Font = FONT,
@@ -494,27 +548,24 @@ local function showMyRoleNotification()
         Parent = notif,
     })
     make("TextLabel", {
-        Size = UDim2.new(1, -20, 1, -30),
+        Size = UDim2.new(1, -20, 0, 40),
         Position = UDim2.new(0, 10, 0, 30),
         BackgroundTransparency = 1,
-        Text = string.format("%s %s", roleData.Emoji or "", myRole),
+        Text = string.format("%s  %s", roleData.Emoji or "", myRole),
         TextColor3 = getSideColor(roleData.Side),
         TextXAlignment = Enum.TextXAlignment.Left,
         Font = FONT_BOLD,
-        TextSize = 22,
+        TextSize = 24,
         Parent = notif,
     })
     
-    -- Auto-fade after 8s
     task.delay(8, function()
-        if notif and notif.Parent then
-            notif:Destroy()
-        end
+        if notif and notif.Parent then notif:Destroy() end
     end)
 end
 
 -- ============================================================
--- HOOK NETWORK EVENTS
+-- HOOK NETWORK
 -- ============================================================
 pcall(function()
     local Net = require(ReplicatedStorage.Common.Network)
@@ -531,20 +582,35 @@ pcall(function()
 end)
 
 -- ============================================================
--- TOGGLE & DRAG
+-- TOGGLE LOGIC
 -- ============================================================
-local UserInputService = game:GetService("UserInputService")
-
-UserInputService.InputBegan:Connect(function(input, gpe)
-    if gpe then return end
-    if input.KeyCode == TOGGLE_KEY then
-        mainFrame.Visible = not mainFrame.Visible
-    elseif USE_TAB_TOGGLE and input.KeyCode == Enum.KeyCode.Tab then
-        mainFrame.Visible = not mainFrame.Visible
+local function togglePanel()
+    mainFrame.Visible = not mainFrame.Visible
+    if mainFrame.Visible then
+        -- Refresh content when opening
+        if currentTab == "Good" then renderTab("Good")
+        elseif currentTab == "Evil" then renderTab("Evil")
+        else renderTab("Neutral") end
     end
+end
+
+toggleButton.MouseButton1Click:Connect(togglePanel)
+closeBtn.MouseButton1Click:Connect(togglePanel)
+
+-- Backup keyboard toggle (might not work in all executors, that's why we have the button)
+pcall(function()
+    local UIS = game:GetService("UserInputService")
+    UIS.InputBegan:Connect(function(input, gpe)
+        if gpe then return end
+        if input.KeyCode == TOGGLE_KEY then
+            togglePanel()
+        end
+    end)
 end)
 
--- Dragging
+-- ============================================================
+-- DRAG PANEL
+-- ============================================================
 local dragging, dragStart, startPos
 titleBar.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
@@ -558,11 +624,17 @@ titleBar.InputEnded:Connect(function(input)
         dragging = false
     end
 end)
-UserInputService.InputChanged:Connect(function(input)
-    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-        local delta = input.Position - dragStart
-        mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-    end
+
+pcall(function()
+    game:GetService("UserInputService").InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            mainFrame.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y
+            )
+        end
+    end)
 end)
 
 -- ============================================================
@@ -571,6 +643,5 @@ end)
 screenGui.Parent = LocalPlayer.PlayerGui
 highlightTab(goodTab)
 renderTab("Good")
-showLiveRolelist()
 
-print("[RoleCheatSheet] Loaded. Press RightControl to toggle.")
+print("[RoleCheatSheet] Ready! Click the '📋 Roles' button in the corner to open the panel.")
