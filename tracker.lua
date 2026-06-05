@@ -1,647 +1,530 @@
 --[[
-    Role Cheat Sheet - Button Toggle Version
-    Click the floating button (bottom-right) to open/close the panel.
+    Flicker Role Viewer
+    Builds a Dex-like GUI that scans for roles and displays them in tabs.
+    Methods: Player value scan, ReplicatedStorage scan, PlayerGui text scan
 ]]
 
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local LocalPlayer = Players.LocalPlayer
+local RS = game:GetService("ReplicatedStorage")
+local UIS = game:GetService("UserInputService")
+local me = Players.LocalPlayer
+local playerGui = me:WaitForChild("PlayerGui")
 
--- ============================================================
--- CONFIG
--- ============================================================
-local BUTTON_TEXT = "📋 Roles"  -- text on the toggle button
-local BUTTON_POSITION = "BottomRight"  -- "BottomRight", "BottomLeft", "TopRight", "TopLeft"
-local TOGGLE_KEY = Enum.KeyCode.RightControl  -- backup keyboard toggle (optional)
-
--- ============================================================
--- STYLE
--- ============================================================
-local COLORS = {
-    Background = Color3.fromRGB(20, 20, 25),
-    Header = Color3.fromRGB(30, 30, 40),
-    Section = Color3.fromRGB(40, 40, 55),
-    Text = Color3.fromRGB(230, 230, 230),
-    Muted = Color3.fromRGB(160, 160, 170),
-    Good = Color3.fromRGB(103, 225, 122),
-    Evil = Color3.fromRGB(255, 85, 88),
-    Neutral = Color3.fromRGB(197, 197, 197),
-    Accent = Color3.fromRGB(100, 130, 255),
-    Button = Color3.fromRGB(60, 60, 80),
-    ButtonHover = Color3.fromRGB(80, 80, 110),
+-- ============== CONFIG ==============
+local CONFIG = {
+    autoRefreshInterval = 3,
+    windowSize = UDim2.new(0, 380, 0, 480),
+    primaryColor  = Color3.fromRGB(30, 30, 40),
+    accentColor   = Color3.fromRGB(85, 130, 255),
+    headerColor   = Color3.fromRGB(45, 45, 60),
+    textColor     = Color3.fromRGB(230, 230, 240),
+    dangerColor   = Color3.fromRGB(255, 80, 80),
+    goodColor     = Color3.fromRGB(80, 220, 120),
+    mutedColor    = Color3.fromRGB(150, 150, 170),
 }
-local FONT = Enum.Font.GothamMedium
-local FONT_BOLD = Enum.Font.GothamBold
 
--- ============================================================
--- HELPER
--- ============================================================
-local function make(className, props, children)
-    local inst = Instance.new(className)
-    for k, v in pairs(props or {}) do
-        if k ~= "Parent" and k ~= "Children" then
-            pcall(function() inst[k] = v end)
-        end
-    end
-    for _, child in ipairs(children or {}) do
-        child.Parent = inst
-    end
-    return inst
-end
+-- Known Flicker role colors
+local ROLE_COLORS = {
+    ["Murderer"]     = Color3.fromRGB(255, 60, 60),
+    ["SerialKiller"] = Color3.fromRGB(255, 60, 60),
+    ["Assassin"]     = Color3.fromRGB(255, 80, 80),
+    ["Survivor"]     = Color3.fromRGB(80, 200, 120),
+    ["Innocent"]     = Color3.fromRGB(80, 200, 120),
+    ["Detective"]    = Color3.fromRGB(80, 150, 255),
+    ["Sheriff"]      = Color3.fromRGB(80, 150, 255),
+    ["Psychic"]      = Color3.fromRGB(180, 100, 255),
+    ["Clown"]        = Color3.fromRGB(255, 180, 50),
+    ["Twins"]        = Color3.fromRGB(255, 130, 200),
+    ["Twin"]         = Color3.fromRGB(255, 130, 200),
+    ["Savior"]       = Color3.fromRGB(100, 220, 255),
+    ["Spy"]          = Color3.fromRGB(200, 200, 200),
+    ["Scout"]        = Color3.fromRGB(150, 220, 100),
+    ["Witch"]        = Color3.fromRGB(200, 100, 255),
+    ["Executioner"]  = Color3.fromRGB(255, 100, 150),
+    ["Bodyguard"]    = Color3.fromRGB(100, 180, 255),
+    ["Tracker"]      = Color3.fromRGB(255, 200, 100),
+}
 
-local function getPos(side)
-    local off = 20
-    if side == "BottomRight" then
-        return UDim2.new(1, -100 - off, 1, -50 - off)
-    elseif side == "BottomLeft" then
-        return UDim2.new(0, off, 1, -50 - off)
-    elseif side == "TopRight" then
-        return UDim2.new(1, -100 - off, 0, off)
-    else
-        return UDim2.new(0, off, 0, off)
-    end
-end
-
--- ============================================================
--- FIND GAME MODULES
--- ============================================================
-local function findModule(parent, name, depth)
-    depth = depth or 0
-    if depth > 5 then return nil end
-    for _, child in ipairs(parent:GetChildren()) do
-        if child:IsA("ModuleScript") and child.Name == name then
-            return child
-        end
-    end
-    for _, child in ipairs(parent:GetChildren()) do
-        local found = findModule(child, name, depth + 1)
-        if found then return found end
-    end
-    return nil
-end
-
-local function getRoleInfo()
-    local candidates = {
-        ReplicatedStorage:FindFirstChild("RoleInfo"),
-        ReplicatedStorage:FindFirstChild("Data") and ReplicatedStorage.Data:FindFirstChild("RoleInfo"),
-        findModule(ReplicatedStorage, "RoleInfo"),
-    }
-    for _, c in ipairs(candidates) do
-        if c then
-            local ok, data = pcall(require, c)
-            if ok and type(data) == "table" and next(data) then return data end
-        end
-    end
-    return nil
-end
-
-local function getDataController()
-    if ReplicatedStorage:FindFirstChild("DataController") then
-        local ok, dc = pcall(require, ReplicatedStorage.DataController)
-        if ok then return dc end
-    end
-    if ReplicatedStorage:FindFirstChild("Data") and ReplicatedStorage.Data:FindFirstChild("DataController") then
-        local ok, dc = pcall(require, ReplicatedStorage.Data.DataController)
-        if ok then return dc end
-    end
-    return nil
-end
-
-local ROLE_INFO = getRoleInfo()
-local DATA_CTRL = getDataController()
-
-if not ROLE_INFO then
-    warn("[RoleCheatSheet] RoleInfo module not found.")
-end
-
--- ============================================================
--- CLEAN UP OLD GUI
--- ============================================================
-local old = LocalPlayer.PlayerGui:FindFirstChild("RoleCheatSheetGUI")
+-- ============== GUI BUILD ==============
+local old = playerGui:FindFirstChild("FlickerRoleViewer")
 if old then old:Destroy() end
 
--- ============================================================
--- BUILD GUI
--- ============================================================
-local screenGui = make("ScreenGui", {
-    Name = "RoleCheatSheetGUI",
-    ResetOnSpawn = false,
-    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-    IgnoreGuiInset = true,
-    DisplayOrder = 999,  -- render on top
-})
+local gui = Instance.new("ScreenGui")
+gui.Name = "FlickerRoleViewer"
+gui.ResetOnSpawn = false
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.DisplayOrder = 999
+gui.Parent = playerGui
 
--- === TOGGLE BUTTON (always visible) ===
-local toggleButton = make("TextButton", {
-    Name = "ToggleButton",
-    Size = UDim2.new(0, 110, 0, 50),
-    Position = getPos(BUTTON_POSITION),
-    BackgroundColor3 = COLORS.Button,
-    BorderSizePixel = 0,
-    Text = BUTTON_TEXT,
-    TextColor3 = COLORS.Text,
-    Font = FONT_BOLD,
-    TextSize = 16,
-    AutoButtonColor = true,
-    Parent = screenGui,
-})
-make("UICorner", {CornerRadius = UDim.new(0, 10), Parent = toggleButton})
-make("UIStroke", {Color = COLORS.Accent, Thickness = 2, Parent = toggleButton})
-
--- hover effect
-toggleButton.MouseEnter:Connect(function()
-    toggleButton.BackgroundColor3 = COLORS.ButtonHover
-end)
-toggleButton.MouseLeave:Connect(function()
-    toggleButton.BackgroundColor3 = COLORS.Button
-end)
-
--- === MAIN PANEL (hidden by default) ===
-local mainFrame = make("Frame", {
-    Name = "Main",
-    Size = UDim2.new(0, 520, 0, 620),
-    Position = UDim2.new(0.5, -260, 0.5, -310),
-    BackgroundColor3 = COLORS.Background,
-    BorderSizePixel = 0,
-    Visible = false,  -- starts hidden
-    Parent = screenGui,
-})
-make("UICorner", {CornerRadius = UDim.new(0, 10), Parent = mainFrame})
-make("UIStroke", {Color = COLORS.Accent, Thickness = 2, Parent = mainFrame})
+-- Main window
+local main = Instance.new("Frame")
+main.Size = CONFIG.windowSize
+main.Position = UDim2.new(0.5, -190, 0.5, -240)
+main.BackgroundColor3 = CONFIG.primaryColor
+main.BorderSizePixel = 0
+main.Active = true
+main.Draggable = true
+main.Parent = gui
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
+local mainStroke = Instance.new("UIStroke", main)
+mainStroke.Color = CONFIG.accentColor
+mainStroke.Thickness = 1.5
 
 -- Title bar
-local titleBar = make("Frame", {
-    Name = "TitleBar",
-    Size = UDim2.new(1, 0, 0, 40),
-    BackgroundColor3 = COLORS.Header,
-    BorderSizePixel = 0,
-    Parent = mainFrame,
-})
-make("UICorner", {CornerRadius = UDim.new(0, 10), Parent = titleBar})
-make("Frame", {
-    Size = UDim2.new(1, 0, 0.5, 0),
-    Position = UDim2.new(0, 0, 0.5, 0),
-    BackgroundColor3 = COLORS.Header,
-    BorderSizePixel = 0,
-    Parent = titleBar,
-})
+local titleBar = Instance.new("Frame")
+titleBar.Size = UDim2.new(1, 0, 0, 36)
+titleBar.BackgroundColor3 = CONFIG.headerColor
+titleBar.BorderSizePixel = 0
+titleBar.Parent = main
+Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0, 10)
 
-make("TextLabel", {
-    Name = "Title",
-    Size = UDim2.new(1, -90, 1, 0),
-    Position = UDim2.new(0, 10, 0, 0),
-    BackgroundTransparency = 1,
-    Text = "📋  Role Cheat Sheet",
-    TextColor3 = COLORS.Text,
-    TextXAlignment = Enum.TextXAlignment.Left,
-    Font = FONT_BOLD,
-    TextSize = 16,
-    Parent = titleBar,
-})
+-- Patch bottom of title bar to be flat
+local patch = Instance.new("Frame")
+patch.Size = UDim2.new(1, 0, 0, 12)
+patch.Position = UDim2.new(0, 0, 1, -12)
+patch.BackgroundColor3 = CONFIG.headerColor
+patch.BorderSizePixel = 0
+patch.Parent = titleBar
 
--- Close button (X) in title bar
-local closeBtn = make("TextButton", {
-    Name = "Close",
-    Size = UDim2.new(0, 30, 0, 30),
-    Position = UDim2.new(1, -35, 0, 5),
-    BackgroundColor3 = COLORS.Section,
-    BorderSizePixel = 0,
-    Text = "X",
-    TextColor3 = COLORS.Evil,
-    Font = FONT_BOLD,
-    TextSize = 16,
-    AutoButtonColor = true,
-    Parent = titleBar,
-})
-make("UICorner", {CornerRadius = UDim.new(0, 6), Parent = closeBtn})
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -90, 1, 0)
+title.Position = UDim2.new(0, 12, 0, 0)
+title.BackgroundTransparency = 1
+title.Text = "👁  Flicker Role Viewer"
+title.TextColor3 = CONFIG.textColor
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Font = Enum.Font.GothamBold
+title.TextSize = 16
+title.Parent = titleBar
 
-make("TextLabel", {
-    Name = "Status",
-    Size = UDim2.new(1, -20, 0, 20),
-    Position = UDim2.new(0, 10, 0, 42),
-    BackgroundTransparency = 1,
-    Text = ROLE_INFO and "✓ Hooked into live game data" or "⚠ RoleInfo module not found",
-    TextColor3 = ROLE_INFO and COLORS.Good or COLORS.Evil,
-    TextXAlignment = Enum.TextXAlignment.Left,
-    Font = FONT,
-    TextSize = 11,
-    Parent = mainFrame,
-})
-
--- Tab buttons
-local tabFrame = make("Frame", {
-    Name = "Tabs",
-    Size = UDim2.new(1, -20, 0, 32),
-    Position = UDim2.new(0, 10, 0, 65),
-    BackgroundTransparency = 1,
-    Parent = mainFrame,
-})
-
-local function makeTab(name, color, order)
-    local btn = make("TextButton", {
-        Name = name,
-        Size = UDim2.new(0.33, -4, 1, 0),
-        Position = UDim2.new(0, (order - 1) * (1/3) * 100 + (order - 1) * 2, 0, 0),
-        BackgroundColor3 = COLORS.Section,
-        BorderSizePixel = 0,
-        Text = name,
-        TextColor3 = color,
-        Font = FONT_BOLD,
-        TextSize = 13,
-        AutoButtonColor = false,
-        Parent = tabFrame,
-    })
-    make("UICorner", {CornerRadius = UDim.new(0, 6), Parent = btn})
-    return btn
+-- Window buttons
+local function makeWindowBtn(pos, text, color)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0, 28, 0, 28)
+    b.Position = pos
+    b.BackgroundColor3 = color
+    b.BorderSizePixel = 0
+    b.Text = text
+    b.TextColor3 = CONFIG.textColor
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 14
+    b.Parent = titleBar
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+    return b
 end
 
-local goodTab = makeTab("Good Team", COLORS.Good, 1)
-local evilTab = makeTab("Evil Team", COLORS.Evil, 2)
-local neutralTab = makeTab("Neutral", COLORS.Neutral, 3)
+local closeBtn = makeWindowBtn(UDim2.new(1, -32, 0, 4), "X", CONFIG.dangerColor)
+local minBtn   = makeWindowBtn(UDim2.new(1, -64, 0, 4), "—", CONFIG.accentColor)
 
--- Content area
-local contentFrame = make("ScrollingFrame", {
-    Name = "Content",
-    Size = UDim2.new(1, -20, 1, -110),
-    Position = UDim2.new(0, 10, 0, 105),
-    BackgroundTransparency = 1,
-    BorderSizePixel = 0,
-    ScrollBarThickness = 6,
-    ScrollBarImageColor3 = COLORS.Accent,
-    CanvasSize = UDim2.new(0, 0, 0, 0),
-    AutomaticCanvasSize = Enum.AutomaticSize.Y,
-    Parent = mainFrame,
-})
-make("UIListLayout", {
-    SortOrder = Enum.SortOrder.LayoutOrder,
-    Padding = UDim.new(0, 6),
-    Parent = contentFrame,
-})
+-- Tab bar
+local tabBar = Instance.new("Frame")
+tabBar.Size = UDim2.new(1, -16, 0, 28)
+tabBar.Position = UDim2.new(0, 8, 0, 44)
+tabBar.BackgroundTransparency = 1
+tabBar.Parent = main
+Instance.new("UIListLayout", tabBar).Padding = UDim.new(0, 4)
 
--- ============================================================
--- RENDER
--- ============================================================
-local function clearContent()
-    for _, c in ipairs(contentFrame:GetChildren()) do
-        if c:IsA("Frame") or c:IsA("TextButton") or c:IsA("TextLabel") then
-            c:Destroy()
-        end
-    end
-end
+-- Pages container
+local pages = Instance.new("Frame")
+pages.Size = UDim2.new(1, -16, 1, -90)
+pages.Position = UDim2.new(0, 8, 0, 76)
+pages.BackgroundTransparency = 1
+pages.Parent = main
 
-local function highlightTab(activeBtn)
-    for _, btn in ipairs({goodTab, evilTab, neutralTab}) do
-        btn.BackgroundColor3 = (btn == activeBtn) and COLORS.Accent or COLORS.Section
-    end
-end
+-- Footer
+local footer = Instance.new("Frame")
+footer.Size = UDim2.new(1, -16, 0, 32)
+footer.Position = UDim2.new(0, 8, 1, -38)
+footer.BackgroundColor3 = CONFIG.headerColor
+footer.BorderSizePixel = 0
+footer.Parent = main
+Instance.new("UICorner", footer).CornerRadius = UDim.new(0, 6)
 
-local function getSideColor(side)
-    if side == "Good" then return COLORS.Good
-    elseif side == "Evil" then return COLORS.Evil
-    else return COLORS.Neutral end
-end
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(0.5, -8, 1, 0)
+statusLabel.Position = UDim2.new(0, 8, 0, 0)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = "Ready"
+statusLabel.TextColor3 = CONFIG.textColor
+statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+statusLabel.Font = Enum.Font.Gotham
+statusLabel.TextSize = 12
+statusLabel.Parent = footer
 
-local currentRolelist = nil
-local playerCount = nil
+local refreshBtn = Instance.new("TextButton")
+refreshBtn.Size = UDim2.new(0, 60, 0, 22)
+refreshBtn.Position = UDim2.new(1, -68, 0.5, -11)
+refreshBtn.BackgroundColor3 = CONFIG.accentColor
+refreshBtn.BorderSizePixel = 0
+refreshBtn.Text = "Scan"
+refreshBtn.TextColor3 = CONFIG.textColor
+refreshBtn.Font = Enum.Font.GothamBold
+refreshBtn.TextSize = 12
+refreshBtn.Parent = footer
+Instance.new("UICorner", refreshBtn).CornerRadius = UDim.new(0, 5)
 
-local function fetchLiveRolelist()
-    if not DATA_CTRL then return nil, nil end
-    local ok, replica = pcall(function()
-        return DATA_CTRL:GetFirstReplicaOfClass("GameData")
-    end)
-    if not ok or not replica then return nil, nil end
-    local data = replica.Data
-    if not data then return nil, nil end
-    return data.Rolelist, #data.Players
-end
+local autoBtn = Instance.new("TextButton")
+autoBtn.Size = UDim2.new(0, 70, 0, 22)
+autoBtn.Position = UDim2.new(1, -142, 0.5, -11)
+autoBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 75)
+autoBtn.BorderSizePixel = 0
+autoBtn.Text = "Auto: Off"
+autoBtn.TextColor3 = CONFIG.textColor
+autoBtn.Font = Enum.Font.GothamBold
+autoBtn.TextSize = 12
+autoBtn.Parent = footer
+Instance.new("UICorner", autoBtn).CornerRadius = UDim.new(0, 5)
 
-local function createRoleCard(roleName, roleData, order)
-    local sideColor = getSideColor(roleData.Side)
-    local amountText = (roleData.Amount and roleData.Amount > 1) and (" x" .. tostring(roleData.Amount)) or ""
-    
-    local card = make("TextButton", {
-        Name = roleName,
-        Size = UDim2.new(1, 0, 0, 0),
-        AutomaticSize = Enum.AutomaticSize.Y,
-        BackgroundColor3 = COLORS.Section,
-        BorderSizePixel = 0,
-        Text = "",
-        AutoButtonColor = true,
-        LayoutOrder = order or 100,
-        Parent = contentFrame,
-    })
-    make("UICorner", {CornerRadius = UDim.new(0, 8), Parent = card})
-    make("UIStroke", {Color = sideColor, Thickness = 1, Transparency = 0.5, Parent = card})
-    
-    make("TextLabel", {
-        Size = UDim2.new(1, -20, 0, 32),
-        Position = UDim2.new(0, 10, 0, 4),
-        BackgroundTransparency = 1,
-        Text = string.format("%s %s%s", roleData.Emoji or "❓", roleName, amountText),
-        TextColor3 = sideColor,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        Font = FONT_BOLD,
-        TextSize = 15,
-        Parent = card,
-    })
-    
-    local info = roleData.Info or {}
-    local lines = {}
-    for _, key in ipairs({"Goal", "Abilities", "Details", "Behavior"}) do
-        if info[key] and #info[key] > 0 then
-            table.insert(lines, "<font color='#" .. COLORS.Muted:ToHex():sub(1,6) .. "'>[" .. key .. "]</font>")
-            for _, item in ipairs(info[key]) do
-                local txt = type(item) == "string" and item or (item[1] or "")
-                table.insert(lines, "  • " .. txt)
-            end
-            table.insert(lines, "")
-        end
-    end
-    
-    make("TextLabel", {
-        Size = UDim2.new(1, -20, 0, 0),
-        Position = UDim2.new(0, 10, 0, 36),
-        AutomaticSize = Enum.AutomaticSize.Y,
-        BackgroundTransparency = 1,
-        Text = table.concat(lines, "\n"),
-        TextWrapped = true,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        TextYAlignment = Enum.TextYAlignment.Top,
-        Font = FONT,
-        TextSize = 12,
-        TextColor3 = COLORS.Text,
-        RichText = true,
-        Parent = card,
-    })
-    
-    make("UIPadding", {
-        PaddingBottom = UDim.new(0, 10),
-        Parent = card,
-    })
-end
+-- ============== TAB SYSTEM ==============
+local tabs = {}
 
-local function renderLiveRolelist(orderStart)
-    if not currentRolelist then return orderStart end
-    -- Header
-    local header = make("Frame", {
-        Name = "LiveHeader",
-        Size = UDim2.new(1, 0, 0, 32),
-        BackgroundColor3 = COLORS.Header,
-        BorderSizePixel = 0,
-        LayoutOrder = orderStart,
-        Parent = contentFrame,
-    })
-    make("UICorner", {CornerRadius = UDim.new(0, 6), Parent = header})
-    make("TextLabel", {
-        Size = UDim2.new(1, -20, 1, 0),
-        Position = UDim2.new(0, 10, 0, 0),
-        BackgroundTransparency = 1,
-        Text = string.format("🎮 Current Game (%d players)", playerCount or 0),
-        TextColor3 = COLORS.Accent,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        Font = FONT_BOLD,
-        TextSize = 13,
-        Parent = header,
-    })
-    orderStart = orderStart + 1
-    
-    -- Show actual rolelist entries (respecting the "fewer players than rolelist" rule)
-    for i, roles in ipairs(currentRolelist) do
-        if playerCount and playerCount < i then break end
-        -- Twin → Survivor rule
-        local displayRoles = {}
-        for _, r in ipairs(roles) do
-            if r == "Twin" and playerCount and playerCount <= #currentRolelist then
-                table.insert(displayRoles, "Survivor")
+local function makeTab(name, displayName)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0, 80, 1, 0)
+    btn.BackgroundColor3 = CONFIG.headerColor
+    btn.BorderSizePixel = 0
+    btn.Text = displayName
+    btn.TextColor3 = CONFIG.mutedColor
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 12
+    btn.AutoButtonColor = false
+    btn.Parent = tabBar
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+
+    local page = Instance.new("Frame")
+    page.Size = UDim2.new(1, 0, 1, 0)
+    page.BackgroundTransparency = 1
+    page.Visible = false
+    page.Parent = pages
+
+    tabs[name] = {button = btn, page = page}
+
+    btn.MouseButton1Click:Connect(function()
+        for n, t in pairs(tabs) do
+            t.page.Visible = (n == name)
+            if n == name then
+                t.button.BackgroundColor3 = CONFIG.accentColor
+                t.button.TextColor3 = CONFIG.textColor
             else
-                table.insert(displayRoles, r)
+                t.button.BackgroundColor3 = CONFIG.headerColor
+                t.button.TextColor3 = CONFIG.mutedColor
             end
         end
-        
-        local entry = make("TextLabel", {
-            Size = UDim2.new(1, 0, 0, 26),
-            BackgroundColor3 = COLORS.Section,
-            BorderSizePixel = 0,
-            Text = "  Slot " .. i .. ": " .. table.concat(displayRoles, " + "),
-            TextColor3 = COLORS.Text,
-            TextXAlignment = Enum.TextXAlignment.Left,
-            Font = FONT,
-            TextSize = 12,
-            LayoutOrder = orderStart,
-            Parent = contentFrame,
-        })
-        make("UICorner", {CornerRadius = UDim.new(0, 4), Parent = entry})
-        orderStart = orderStart + 1
-    end
-    
-    -- Survivor filler
-    if playerCount and currentRolelist and playerCount > #currentRolelist then
-        local fillers = playerCount - #currentRolelist
-        local entry = make("TextLabel", {
-            Size = UDim2.new(1, 0, 0, 26),
-            BackgroundColor3 = COLORS.Section,
-            BorderSizePixel = 0,
-            Text = "  Slot " .. (#currentRolelist + 1) .. ": Survivor x" .. fillers,
-            TextColor3 = COLORS.Good,
-            TextXAlignment = Enum.TextXAlignment.Left,
-            Font = FONT,
-            TextSize = 12,
-            LayoutOrder = orderStart,
-            Parent = contentFrame,
-        })
-        make("UICorner", {CornerRadius = UDim.new(0, 4), Parent = entry})
-    end
-    
-    return orderStart + 1
+    end)
+
+    return page
 end
 
-local function renderTab(side)
-    clearContent()
-    if not ROLE_INFO then
-        make("TextLabel", {
-            Size = UDim2.new(1, 0, 0, 100),
-            BackgroundTransparency = 1,
-            Text = "RoleInfo module not found.\nGame data unavailable.",
-            TextColor3 = COLORS.Evil,
-            Font = FONT,
-            TextSize = 14,
-            TextWrapped = true,
-            Parent = contentFrame,
-        })
+-- ============== SCROLLING LIST HELPER ==============
+local function makeScrollingList(parent)
+    local list = Instance.new("ScrollingFrame")
+    list.Size = UDim2.new(1, 0, 1, 0)
+    list.BackgroundTransparency = 1
+    list.BorderSizePixel = 0
+    list.ScrollBarThickness = 4
+    list.ScrollBarImageColor3 = CONFIG.accentColor
+    list.CanvasSize = UDim2.new(0, 0, 0, 0)
+    list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    list.Parent = parent
+    Instance.new("UIListLayout", list).Padding = UDim.new(0, 4)
+    return list
+end
+
+local function clearList(list)
+    for _, c in ipairs(list:GetChildren()) do
+        if c:IsA("Frame") or c:IsA("TextLabel") then c:Destroy() end
+    end
+end
+
+local function addRow(list, name, role, source)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, -4, 0, 40)
+    row.BackgroundColor3 = CONFIG.headerColor
+    row.BorderSizePixel = 0
+    row.LayoutOrder = #list:GetChildren()
+    row.Parent = list
+    Instance.new("UICorner", row).CornerRadius = UDim.new(0, 5)
+
+    -- Avatar circle
+    local avatar = Instance.new("Frame")
+    avatar.Size = UDim2.new(0, 30, 0, 30)
+    avatar.Position = UDim2.new(0, 5, 0.5, -15)
+    avatar.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+    avatar.BorderSizePixel = 0
+    avatar.Parent = row
+    Instance.new("UICorner", avatar).CornerRadius = UDim.new(1, 0)
+
+    local initial = Instance.new("TextLabel")
+    initial.Size = UDim2.new(1, 0, 1, 0)
+    initial.BackgroundTransparency = 1
+    initial.Text = string.upper(string.sub(name, 1, 1))
+    initial.TextColor3 = CONFIG.textColor
+    initial.Font = Enum.Font.GothamBold
+    initial.TextSize = 14
+    initial.Parent = avatar
+
+    -- Player name + role
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Size = UDim2.new(1, -80, 0, 18)
+    nameLabel.Position = UDim2.new(0, 40, 0, 4)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.Text = name
+    nameLabel.TextColor3 = CONFIG.textColor
+    nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+    nameLabel.Font = Enum.Font.GothamBold
+    nameLabel.TextSize = 13
+    nameLabel.Parent = row
+
+    local roleColor = ROLE_COLORS[role] or CONFIG.mutedColor
+    local roleLabel = Instance.new("TextLabel")
+    roleLabel.Size = UDim2.new(1, -80, 0, 14)
+    roleLabel.Position = UDim2.new(0, 40, 0, 22)
+    roleLabel.BackgroundTransparency = 1
+    roleLabel.Text = role
+    roleLabel.TextColor3 = roleColor
+    roleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    roleLabel.Font = Enum.Font.Gotham
+    roleLabel.TextSize = 11
+    roleLabel.Parent = row
+
+    -- Role badge
+    local badge = Instance.new("Frame")
+    badge.Size = UDim2.new(0, 28, 0, 28)
+    badge.Position = UDim2.new(1, -36, 0.5, -14)
+    badge.BackgroundColor3 = roleColor
+    badge.BorderSizePixel = 0
+    badge.Parent = row
+    Instance.new("UICorner", badge).CornerRadius = UDim.new(0, 6)
+
+    local badgeText = Instance.new("TextLabel")
+    badgeText.Size = UDim2.new(1, 0, 1, 0)
+    badgeText.BackgroundTransparency = 1
+    badgeText.Text = string.sub(role, 1, 1):upper()
+    badgeText.TextColor3 = Color3.fromRGB(255, 255, 255)
+    badgeText.Font = Enum.Font.GothamBold
+    badgeText.TextSize = 13
+    badgeText.Parent = badge
+
+    -- Hover for source
+    if source then
+        row.MouseEnter:Connect(function() statusLabel.Text = "📍 " .. source end)
+        row.MouseLeave:Connect(function() statusLabel.Text = "Ready" end)
+    end
+end
+
+-- ============== SCAN LOGIC ==============
+local roleCache = {}
+
+local function deepScan(target, depth, maxDepth, results, keywords)
+    if depth > maxDepth then return end
+    local ok, children = pcall(function() return target:GetChildren() end)
+    if not ok then return end
+    for _, obj in ipairs(children) do
+        if obj:IsA("ValueBase") then
+            local val = tostring(obj.Value)
+            for _, kw in ipairs(keywords) do
+                if val:lower():find(kw) or obj.Name:lower():find(kw) then
+                    table.insert(results, {
+                        name = obj.Name,
+                        value = val,
+                        path = obj:GetFullName()
+                    })
+                    break
+                end
+            end
+        elseif not obj:IsA("GuiObject") then
+            deepScan(obj, depth + 1, maxDepth, results, keywords)
+        end
+    end
+end
+
+local KEYWORDS = {
+    "role", "team", "class", "job", "alignment",
+    "survivor", "murderer", "detective", "psychic",
+    "clown", "twin", "savior", "spy", "scout",
+    "witch", "executioner", "bodyguard", "tracker",
+    "innocent", "guilty", "good", "evil"
+}
+
+local function scanRoles()
+    roleCache = {}
+
+    -- Method 1: Player values
+    for _, p in ipairs(Players:GetPlayers()) do
+        local r = {}
+        deepScan(p, 0, 3, r, KEYWORDS)
+        for _, hit in ipairs(r) do
+            if not roleCache[p.Name] then
+                roleCache[p.Name] = {role = hit.value, source = hit.path, method = "Player"}
+            end
+        end
+    end
+
+    -- Method 2: ReplicatedStorage (cross-references player names)
+    local rsHits = {}
+    deepScan(RS, 0, 4, rsHits, KEYWORDS)
+    for _, hit in ipairs(rsHits) do
+        for _, p in ipairs(Players:GetPlayers()) do
+            if hit.path:find(p.Name) and not roleCache[p.Name] then
+                roleCache[p.Name] = {role = hit.value, source = hit.path, method = "Storage"}
+                break
+            end
+        end
+    end
+
+    -- Method 3: PlayerGui text labels
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p:FindFirstChild("PlayerGui") and not roleCache[p.Name] then
+            for _, g in ipairs(p.PlayerGui:GetDescendants()) do
+                if g:IsA("TextLabel") and g.Text and #g.Text < 30 then
+                    local t = g.Text:lower()
+                    for _, kw in ipairs(KEYWORDS) do
+                        if t:find(kw) then
+                            roleCache[p.Name] = {role = g.Text, source = g:GetFullName(), method = "GUI"}
+                            break
+                        end
+                    end
+                    if roleCache[p.Name] then break end
+                end
+            end
+        end
+    end
+
+    return roleCache
+end
+
+-- ============== BUILD TABS ==============
+local playersPage = makeTab("Players", "Players")
+local playersList = makeScrollingList(playersPage)
+
+local livePage = makeTab("Live", "Live Scan")
+local liveList = makeScrollingList(livePage)
+
+local infoPage = makeTab("Info", "Info")
+local infoText = Instance.new("TextLabel")
+infoText.Size = UDim2.new(1, -16, 1, -16)
+infoText.Position = UDim2.new(0, 8, 0, 8)
+infoText.BackgroundTransparency = 1
+infoText.TextColor3 = CONFIG.textColor
+infoText.TextXAlignment = Enum.TextXAlignment.Left
+infoText.TextYAlignment = Enum.TextYAlignment.Top
+infoText.Font = Enum.Font.Gotham
+infoText.TextSize = 12
+infoText.TextWrapped = true
+infoText.Text = [[
+Flicker Role Viewer v1.0
+
+3 scan methods:
+  1. Player values (leaderstats, etc.)
+  2. ReplicatedStorage (cross-refs names)
+  3. PlayerGui text labels
+
+How to use:
+  • Click "Scan" to refresh
+  • Toggle "Auto" for live updates (3s)
+  • Hover any row → see data source
+  • Drag title bar to move window
+  • "—" to minimize, "X" to close
+
+Limitations:
+  • Only finds client-readable values
+  • Some games hide roles server-side
+  • Heuristic — may need a path hint
+]]
+infoText.Parent = infoPage
+
+-- Activate first tab
+tabs["Players"].button.MouseButton1Click:Fire()
+
+-- ============== UPDATE FUNCTIONS ==============
+local function updatePlayersList()
+    clearList(playersList)
+    if next(roleCache) == nil then
+        local empty = Instance.new("TextLabel")
+        empty.Size = UDim2.new(1, -8, 0, 60)
+        empty.BackgroundTransparency = 1
+        empty.Text = "No roles detected.\nClick 'Scan' to start."
+        empty.TextColor3 = CONFIG.mutedColor
+        empty.Font = Enum.Font.Gotham
+        empty.TextSize = 13
+        empty.TextWrapped = true
+        empty.Parent = playersList
         return
     end
-    
-    -- Try to get live rolelist
-    currentRolelist, playerCount = fetchLiveRolelist()
-    
-    local order = 1
-    
-    -- Show live rolelist at top
-    if currentRolelist and side == "Good" then
-        order = renderLiveRolelist(order)
-    end
-    
-    -- Show all roles on that side
-    -- Collect and sort
-    local roleList = {}
-    for roleName, roleData in pairs(ROLE_INFO) do
-        if type(roleData) == "table" and roleData.Side == side then
-            table.insert(roleList, {roleName, roleData})
-        end
-    end
-    table.sort(roleList, function(a, b) return a[1] < b[1] end)
-    
-    for _, entry in ipairs(roleList) do
-        createRoleCard(entry[1], entry[2], order)
-        order = order + 1
+    for name, data in pairs(roleCache) do
+        addRow(playersList, name, data.role, data.source)
     end
 end
 
-goodTab.MouseButton1Click:Connect(function()
-    highlightTab(goodTab)
-    renderTab("Good")
-end)
-evilTab.MouseButton1Click:Connect(function()
-    highlightTab(evilTab)
-    renderTab("Evil")
-end)
-neutralTab.MouseButton1Click:Connect(function()
-    highlightTab(neutralTab)
-    renderTab("Neutral")
-end)
-
--- ============================================================
--- MY ROLE NOTIFICATION
--- ============================================================
-local myRole = nil
-local myRoleDetails = nil
-
-local function showMyRoleNotification()
-    if not myRole or not ROLE_INFO then return end
-    local roleData = ROLE_INFO[myRole]
-    if not roleData then return end
-    
-    -- Remove old notification
-    local old = screenGui:FindFirstChild("MyRoleNotif")
-    if old then old:Destroy() end
-    
-    local notif = make("Frame", {
-        Name = "MyRoleNotif",
-        Size = UDim2.new(0, 320, 0, 90),
-        Position = UDim2.new(0.5, -160, 0, 20),
-        BackgroundColor3 = COLORS.Header,
-        BorderSizePixel = 0,
-        Parent = screenGui,
-    })
-    make("UICorner", {CornerRadius = UDim.new(0, 10), Parent = notif})
-    make("UIStroke", {Color = getSideColor(roleData.Side), Thickness = 2, Parent = notif})
-    
-    make("TextLabel", {
-        Size = UDim2.new(1, -20, 0, 25),
-        Position = UDim2.new(0, 10, 0, 8),
-        BackgroundTransparency = 1,
-        Text = "🎭 Your Role Was Revealed",
-        TextColor3 = COLORS.Muted,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        Font = FONT,
-        TextSize = 12,
-        Parent = notif,
-    })
-    make("TextLabel", {
-        Size = UDim2.new(1, -20, 0, 40),
-        Position = UDim2.new(0, 10, 0, 30),
-        BackgroundTransparency = 1,
-        Text = string.format("%s  %s", roleData.Emoji or "", myRole),
-        TextColor3 = getSideColor(roleData.Side),
-        TextXAlignment = Enum.TextXAlignment.Left,
-        Font = FONT_BOLD,
-        TextSize = 24,
-        Parent = notif,
-    })
-    
-    task.delay(8, function()
-        if notif and notif.Parent then notif:Destroy() end
-    end)
-end
-
--- ============================================================
--- HOOK NETWORK
--- ============================================================
-pcall(function()
-    local Net = require(ReplicatedStorage.Common.Network)
-    Net:BindEvents({
-        ["SendRoleInfo"] = function(eventType, payload)
-            if eventType == "Info" then
-                myRole = payload
-                showMyRoleNotification()
-            elseif eventType == "Details" then
-                myRoleDetails = payload
-            end
+local function updateLiveList()
+    clearList(liveList)
+    for _, p in ipairs(Players:GetPlayers()) do
+        if roleCache[p.Name] then
+            addRow(liveList, p.Name, roleCache[p.Name].role, roleCache[p.Name].source)
+        else
+            addRow(liveList, p.Name, "Unknown", nil)
         end
-    })
-end)
-
--- ============================================================
--- TOGGLE LOGIC
--- ============================================================
-local function togglePanel()
-    mainFrame.Visible = not mainFrame.Visible
-    if mainFrame.Visible then
-        -- Refresh content when opening
-        if currentTab == "Good" then renderTab("Good")
-        elseif currentTab == "Evil" then renderTab("Evil")
-        else renderTab("Neutral") end
     end
 end
 
-toggleButton.MouseButton1Click:Connect(togglePanel)
-closeBtn.MouseButton1Click:Connect(togglePanel)
-
--- Backup keyboard toggle (might not work in all executors, that's why we have the button)
-pcall(function()
-    local UIS = game:GetService("UserInputService")
-    UIS.InputBegan:Connect(function(input, gpe)
-        if gpe then return end
-        if input.KeyCode == TOGGLE_KEY then
-            togglePanel()
-        end
-    end)
+-- ============== EVENTS ==============
+refreshBtn.MouseButton1Click:Connect(function()
+    statusLabel.Text = "Scanning..."
+    task.wait(0.2)
+    scanRoles()
+    updatePlayersList()
+    updateLiveList()
+    local count = 0
+    for _ in pairs(roleCache) do count = count + 1 end
+    statusLabel.Text = "✓ Found " .. count .. " role(s)"
 end)
 
--- ============================================================
--- DRAG PANEL
--- ============================================================
-local dragging, dragStart, startPos
-titleBar.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = true
-        dragStart = input.Position
-        startPos = mainFrame.Position
-    end
-end)
-titleBar.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = false
+local autoOn = false
+autoBtn.MouseButton1Click:Connect(function()
+    autoOn = not autoOn
+    if autoOn then
+        autoBtn.Text = "Auto: On"
+        autoBtn.BackgroundColor3 = CONFIG.goodColor
+        autoBtn.TextColor3 = Color3.fromRGB(20, 20, 20)
+    else
+        autoBtn.Text = "Auto: Off"
+        autoBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 75)
+        autoBtn.TextColor3 = CONFIG.textColor
     end
 end)
 
-pcall(function()
-    game:GetService("UserInputService").InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            local delta = input.Position - dragStart
-            mainFrame.Position = UDim2.new(
-                startPos.X.Scale, startPos.X.Offset + delta.X,
-                startPos.Y.Scale, startPos.Y.Offset + delta.Y
-            )
+task.spawn(function()
+    while gui and gui.Parent do
+        if autoOn then
+            scanRoles()
+            updatePlayersList()
+            updateLiveList()
+            local count = 0
+            for _ in pairs(roleCache) do count = count + 1 end
+            statusLabel.Text = "⟳ Auto: " .. count .. " found"
         end
-    end)
+        task.wait(CONFIG.autoRefreshInterval)
+    end
 end)
 
--- ============================================================
--- INIT
--- ============================================================
-screenGui.Parent = LocalPlayer.PlayerGui
-highlightTab(goodTab)
-renderTab("Good")
+local minimized = false
+minBtn.MouseButton1Click:Connect(function()
+    minimized = not minimized
+    pages.Visible = not minimized
+    footer.Visible = not minimized
+    tabBar.Visible = not minimized
+    main.Size = minimized and UDim2.new(0, 380, 0, 36) or CONFIG.windowSize
+end)
 
-print("[RoleCheatSheet] Ready! Click the '📋 Roles' button in the corner to open the panel.")
+closeBtn.MouseButton1Click:Connect(function()
+    gui:Destroy()
+end)
+
+-- Initial scan
+task.defer(function()
+    scanRoles()
+    updatePlayersList()
+    updateLiveList()
+end)
+
+print("[FlickerRoleViewer] Loaded ✓  Use the GUI to scan.")
