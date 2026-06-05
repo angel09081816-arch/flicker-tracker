@@ -7,8 +7,140 @@
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local UIS = game:GetService("UserInputService")
-local me = Players.LocalPlayer
+local me = Players.LocalPlayer or Players.PlayerAdded:Wait()
 local playerGui = me:WaitForChild("PlayerGui")
+
+local task_spawn = (task and task.spawn) or spawn
+local task_wait = (task and task.wait) or wait
+local task_defer = (task and task.defer) or function(fn) spawn(fn) end
+
+local function connectButton(button, fn)
+    if button then
+        button.Activated:Connect(fn)
+        button.MouseButton1Click:Connect(fn)
+    end
+end
+
+local function findModule(parent, name, depth)
+    depth = depth or 0
+    if depth > 5 then return nil end
+    for _, child in ipairs(parent:GetChildren()) do
+        if child:IsA("ModuleScript") and child.Name == name then
+            return child
+        end
+    end
+    for _, child in ipairs(parent:GetChildren()) do
+        local found = findModule(child, name, depth + 1)
+        if found then return found end
+    end
+    return nil
+end
+
+local function getRoleInfo()
+    local candidates = {
+        RS:FindFirstChild("RoleInfo"),
+        RS:FindFirstChild("Data") and RS.Data:FindFirstChild("RoleInfo"),
+        findModule(RS, "RoleInfo"),
+    }
+    for _, c in ipairs(candidates) do
+        if c then
+            local ok, data = pcall(require, c)
+            if ok and type(data) == "table" and next(data) then
+                return data
+            end
+        end
+    end
+    return nil
+end
+
+local function getDataController()
+    local candidates = {
+        RS:FindFirstChild("DataController"),
+        RS:FindFirstChild("Data") and RS.Data:FindFirstChild("DataController"),
+        findModule(RS, "DataController"),
+    }
+    for _, c in ipairs(candidates) do
+        if c then
+            local ok, data = pcall(require, c)
+            if ok and type(data) == "table" then
+                return data
+            end
+        end
+    end
+    return nil
+end
+
+local ROLE_INFO = getRoleInfo()
+local DATA_CTRL = getDataController()
+
+local function buildRoleLookup()
+    local lookup = {}
+    if ROLE_INFO then
+        for key, info in pairs(ROLE_INFO) do
+            if type(info) == "table" then
+                lookup[key:lower()] = key
+                if type(info.Name) == "string" then
+                    lookup[info.Name:lower()] = key
+                end
+                if type(info.Aliases) == "table" then
+                    for _, alias in ipairs(info.Aliases) do
+                        if type(alias) == "string" then
+                            lookup[alias:lower()] = key
+                        end
+                    end
+                end
+            end
+        end
+    end
+    local aliases = {
+        murderer = "Murderer",
+        serialkiller = "SerialKiller",
+        serial killer = "SerialKiller",
+        assassin = "Assassin",
+        survivor = "Survivor",
+        innocent = "Innocent",
+        detective = "Detective",
+        sheriff = "Sheriff",
+        psychic = "Psychic",
+        clown = "Clown",
+        twin = "Twin",
+        twins = "Twins",
+        savior = "Savior",
+        spy = "Spy",
+        scout = "Scout",
+        witch = "Witch",
+        executioner = "Executioner",
+        bodyguard = "Bodyguard",
+        tracker = "Tracker",
+    }
+    for alias, canonical in pairs(aliases) do
+        if not lookup[alias] then
+            lookup[alias] = canonical
+        end
+    end
+    return lookup
+end
+
+local ROLE_LOOKUP = buildRoleLookup()
+
+local function normalizeRoleName(value)
+    if value == nil then
+        return nil
+    end
+    local text = tostring(value):gsub("[%s%p]+", " "):lower():gsub("^%s*(.-)%s*$", "%1")
+    if text == "" then
+        return nil
+    end
+    if ROLE_LOOKUP[text] then
+        return ROLE_LOOKUP[text]
+    end
+    for alias, canonical in pairs(ROLE_LOOKUP) do
+        if alias ~= text and text:find(alias, 1, true) then
+            return canonical
+        end
+    end
+    return tostring(value)
+end
 
 -- ============== CONFIG ==============
 local CONFIG = {
@@ -199,7 +331,7 @@ local function makeTab(name, displayName)
 
     tabs[name] = {button = btn, page = page}
 
-    btn.MouseButton1Click:Connect(function()
+    connectButton(btn, function()
         for n, t in pairs(tabs) do
             t.page.Visible = (n == name)
             if n == name then
@@ -228,6 +360,92 @@ local function makeScrollingList(parent)
     list.Parent = parent
     Instance.new("UIListLayout", list).Padding = UDim.new(0, 4)
     return list
+end
+
+local roleListCache = {}
+
+local function getGameDataReplica()
+    if not DATA_CTRL then
+        return nil
+    end
+    local ok, replica = pcall(function()
+        return DATA_CTRL:GetFirstReplicaOfClass("GameData")
+    end)
+    if not ok or type(replica) ~= "table" then
+        return nil
+    end
+    return replica
+end
+
+local function getPlayerNameFromPath(path)
+    if type(path) ~= "string" then
+        return nil
+    end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if path:find(p.Name, 1, true) then
+            return p.Name
+        end
+    end
+    return nil
+end
+
+local function scanGameDataRoles()
+    local replica = getGameDataReplica()
+    if not replica or type(replica.Data) ~= "table" then
+        roleListCache = {}
+        return nil
+    end
+
+    local playersData = replica.Data.Players
+    local rolelist = replica.Data.Rolelist
+    if type(rolelist) ~= "table" then
+        roleListCache = {}
+        return nil
+    end
+
+    local roleEntries = {}
+    for _, entry in ipairs(rolelist) do
+        if type(entry) == "table" then
+            for _, role in ipairs(entry) do
+                local normalized = normalizeRoleName(role)
+                if normalized then
+                    table.insert(roleEntries, normalized)
+                end
+            end
+        elseif type(entry) == "string" then
+            local normalized = normalizeRoleName(entry)
+            if normalized then
+                table.insert(roleEntries, normalized)
+            end
+        end
+    end
+
+    roleListCache = {}
+    for _, role in ipairs(roleEntries) do
+        table.insert(roleListCache, role)
+    end
+
+    if #roleEntries > 0 and type(playersData) == "table" and #playersData == #roleEntries then
+        local assignments = {}
+        for idx, player in ipairs(playersData) do
+            local playerName
+            if type(player) == "string" then
+                playerName = player
+            elseif type(player) == "table" and type(player.Name) == "string" then
+                playerName = player.Name
+            end
+            if playerName then
+                assignments[playerName] = {
+                    role = roleEntries[idx],
+                    source = "GameData",
+                    method = "GameData"
+                }
+            end
+        end
+        return assignments
+    end
+
+    return nil
 end
 
 local function clearList(list)
@@ -312,6 +530,60 @@ local function addRow(list, name, role, source)
     end
 end
 
+local function addCountRow(list, label, count, source)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, -4, 0, 40)
+    row.BackgroundColor3 = CONFIG.headerColor
+    row.BorderSizePixel = 0
+    row.LayoutOrder = #list:GetChildren()
+    row.Parent = list
+    Instance.new("UICorner", row).CornerRadius = UDim.new(0, 5)
+
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Size = UDim2.new(1, -80, 0, 20)
+    nameLabel.Position = UDim2.new(0, 8, 0, 6)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.Text = label
+    nameLabel.TextColor3 = CONFIG.textColor
+    nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+    nameLabel.Font = Enum.Font.GothamBold
+    nameLabel.TextSize = 13
+    nameLabel.Parent = row
+
+    local countLabel = Instance.new("TextLabel")
+    countLabel.Size = UDim2.new(1, -80, 0, 14)
+    countLabel.Position = UDim2.new(0, 8, 0, 22)
+    countLabel.BackgroundTransparency = 1
+    countLabel.Text = "Count: " .. tostring(count)
+    countLabel.TextColor3 = CONFIG.mutedColor
+    countLabel.TextXAlignment = Enum.TextXAlignment.Left
+    countLabel.Font = Enum.Font.Gotham
+    countLabel.TextSize = 11
+    countLabel.Parent = row
+
+    local badge = Instance.new("Frame")
+    badge.Size = UDim2.new(0, 28, 0, 28)
+    badge.Position = UDim2.new(1, -36, 0.5, -14)
+    badge.BackgroundColor3 = CONFIG.accentColor
+    badge.BorderSizePixel = 0
+    badge.Parent = row
+    Instance.new("UICorner", badge).CornerRadius = UDim.new(0, 6)
+
+    local badgeText = Instance.new("TextLabel")
+    badgeText.Size = UDim2.new(1, 0, 1, 0)
+    badgeText.BackgroundTransparency = 1
+    badgeText.Text = tostring(count)
+    badgeText.TextColor3 = Color3.fromRGB(255, 255, 255)
+    badgeText.Font = Enum.Font.GothamBold
+    badgeText.TextSize = 13
+    badgeText.Parent = badge
+
+    if source then
+        row.MouseEnter:Connect(function() statusLabel.Text = "📍 " .. source end)
+        row.MouseLeave:Connect(function() statusLabel.Text = "Ready" end)
+    end
+end
+
 -- ============== SCAN LOGIC ==============
 local roleCache = {}
 
@@ -349,13 +621,23 @@ local KEYWORDS = {
 local function scanRoles()
     roleCache = {}
 
+    local gameDataAssignments = scanGameDataRoles()
+    if gameDataAssignments then
+        for name, data in pairs(gameDataAssignments) do
+            if type(name) == "string" and type(data.role) == "string" then
+                roleCache[name] = data
+            end
+        end
+    end
+
     -- Method 1: Player values
     for _, p in ipairs(Players:GetPlayers()) do
         local r = {}
         deepScan(p, 0, 3, r, KEYWORDS)
         for _, hit in ipairs(r) do
             if not roleCache[p.Name] then
-                roleCache[p.Name] = {role = hit.value, source = hit.path, method = "Player"}
+                local normalized = normalizeRoleName(hit.value)
+                roleCache[p.Name] = {role = normalized or hit.value, source = hit.path, method = "Player"}
             end
         end
     end
@@ -364,11 +646,10 @@ local function scanRoles()
     local rsHits = {}
     deepScan(RS, 0, 4, rsHits, KEYWORDS)
     for _, hit in ipairs(rsHits) do
-        for _, p in ipairs(Players:GetPlayers()) do
-            if hit.path:find(p.Name) and not roleCache[p.Name] then
-                roleCache[p.Name] = {role = hit.value, source = hit.path, method = "Storage"}
-                break
-            end
+        local playerName = getPlayerNameFromPath(hit.path)
+        if playerName and not roleCache[playerName] then
+            local normalized = normalizeRoleName(hit.value)
+            roleCache[playerName] = {role = normalized or hit.value, source = hit.path, method = "Storage"}
         end
     end
 
@@ -380,7 +661,8 @@ local function scanRoles()
                     local t = g.Text:lower()
                     for _, kw in ipairs(KEYWORDS) do
                         if t:find(kw) then
-                            roleCache[p.Name] = {role = g.Text, source = g:GetFullName(), method = "GUI"}
+                            local normalized = normalizeRoleName(g.Text)
+                            roleCache[p.Name] = {role = normalized or g.Text, source = g:GetFullName(), method = "GUI"}
                             break
                         end
                     end
@@ -400,6 +682,9 @@ local playersList = makeScrollingList(playersPage)
 local livePage = makeTab("Live", "Live Scan")
 local liveList = makeScrollingList(livePage)
 
+local rolesPage = makeTab("Roles", "Roles")
+local rolesList = makeScrollingList(rolesPage)
+
 local infoPage = makeTab("Info", "Info")
 local infoText = Instance.new("TextLabel")
 infoText.Size = UDim2.new(1, -16, 1, -16)
@@ -417,7 +702,8 @@ Flicker Role Viewer v1.0
 3 scan methods:
   1. Player values (leaderstats, etc.)
   2. ReplicatedStorage (cross-refs names)
-  3. PlayerGui text labels
+  3. ReplicatedStorage GameData and RoleInfo for Flicker roles
+  4. PlayerGui text labels
 
 How to use:
   • Click "Scan" to refresh
@@ -467,20 +753,44 @@ local function updateLiveList()
     end
 end
 
+local function updateRolesList()
+    clearList(rolesList)
+    if #roleListCache == 0 then
+        local empty = Instance.new("TextLabel")
+        empty.Size = UDim2.new(1, -8, 0, 60)
+        empty.BackgroundTransparency = 1
+        empty.Text = "No active role list found. Join a Flicker game and click Scan."
+        empty.TextColor3 = CONFIG.mutedColor
+        empty.Font = Enum.Font.Gotham
+        empty.TextSize = 13
+        empty.TextWrapped = true
+        empty.Parent = rolesList
+        return
+    end
+    local counts = {}
+    for _, role in ipairs(roleListCache) do
+        counts[role] = (counts[role] or 0) + 1
+    end
+    for role, count in pairs(counts) do
+        addCountRow(rolesList, role, count, "GameData Rolelist")
+    end
+end
+
 -- ============== EVENTS ==============
-refreshBtn.MouseButton1Click:Connect(function()
+connectButton(refreshBtn, function()
     statusLabel.Text = "Scanning..."
-    task.wait(0.2)
+    task_wait(0.2)
     scanRoles()
     updatePlayersList()
     updateLiveList()
+    updateRolesList()
     local count = 0
     for _ in pairs(roleCache) do count = count + 1 end
     statusLabel.Text = "✓ Found " .. count .. " role(s)"
 end)
 
 local autoOn = false
-autoBtn.MouseButton1Click:Connect(function()
+connectButton(autoBtn, function()
     autoOn = not autoOn
     if autoOn then
         autoBtn.Text = "Auto: On"
@@ -493,22 +803,23 @@ autoBtn.MouseButton1Click:Connect(function()
     end
 end)
 
-task.spawn(function()
+task_spawn(function()
     while gui and gui.Parent do
         if autoOn then
             scanRoles()
             updatePlayersList()
             updateLiveList()
+            updateRolesList()
             local count = 0
             for _ in pairs(roleCache) do count = count + 1 end
             statusLabel.Text = "⟳ Auto: " .. count .. " found"
         end
-        task.wait(CONFIG.autoRefreshInterval)
+        task_wait(CONFIG.autoRefreshInterval)
     end
 end)
 
 local minimized = false
-minBtn.MouseButton1Click:Connect(function()
+connectButton(minBtn, function()
     minimized = not minimized
     pages.Visible = not minimized
     footer.Visible = not minimized
@@ -516,15 +827,16 @@ minBtn.MouseButton1Click:Connect(function()
     main.Size = minimized and UDim2.new(0, 380, 0, 36) or CONFIG.windowSize
 end)
 
-closeBtn.MouseButton1Click:Connect(function()
+connectButton(closeBtn, function()
     gui:Destroy()
 end)
 
 -- Initial scan
-task.defer(function()
+task_defer(function()
     scanRoles()
     updatePlayersList()
     updateLiveList()
+    updateRolesList()
 end)
 
 print("[FlickerRoleViewer] Loaded ✓  Use the GUI to scan.")
