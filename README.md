@@ -13,10 +13,12 @@ A private Roblox exploit GUI for Flicker that shows actual role assignments usin
 2. Run the following loadstring:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/angel09081816-arch/flicker-tracker/main/tracker.lua"))()
+local source = game:HttpGet("https://raw.githubusercontent.com/angel09081816-arch/flicker-tracker/main/tracker.lua")
+local fn = loadstring or load
+assert(fn(source))()
 ```
 
-> For Delta Executor mobile, use the same loadstring in the executor entry field and tap Execute.
+> For Delta Executor mobile, use the same loader in the executor entry field and tap Execute.
 
 3. Use the GUI:
    - Click `Scan` to detect roles.
