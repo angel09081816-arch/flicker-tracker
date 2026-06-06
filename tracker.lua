@@ -95,7 +95,7 @@ local function buildRoleLookup()
     local aliases = {
         murderer = "Murderer",
         serialkiller = "SerialKiller",
-        serial killer = "SerialKiller",
+        ["serial killer"] = "SerialKiller",
         assassin = "Assassin",
         survivor = "Survivor",
         innocent = "Innocent",
