@@ -310,6 +310,23 @@ Instance.new("UICorner", autoBtn).CornerRadius = UDim.new(0, 5)
 -- ============== TAB SYSTEM ==============
 local tabs = {}
 
+local function activateTab(name)
+    local selected = tabs[name]
+    if not selected then
+        return
+    end
+    for n, t in pairs(tabs) do
+        t.page.Visible = (n == name)
+        if n == name then
+            t.button.BackgroundColor3 = CONFIG.accentColor
+            t.button.TextColor3 = CONFIG.textColor
+        else
+            t.button.BackgroundColor3 = CONFIG.headerColor
+            t.button.TextColor3 = CONFIG.mutedColor
+        end
+    end
+end
+
 local function makeTab(name, displayName)
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(0, 80, 1, 0)
@@ -332,16 +349,7 @@ local function makeTab(name, displayName)
     tabs[name] = {button = btn, page = page}
 
     connectButton(btn, function()
-        for n, t in pairs(tabs) do
-            t.page.Visible = (n == name)
-            if n == name then
-                t.button.BackgroundColor3 = CONFIG.accentColor
-                t.button.TextColor3 = CONFIG.textColor
-            else
-                t.button.BackgroundColor3 = CONFIG.headerColor
-                t.button.TextColor3 = CONFIG.mutedColor
-            end
-        end
+        activateTab(name)
     end)
 
     return page
@@ -720,7 +728,7 @@ Limitations:
 infoText.Parent = infoPage
 
 -- Activate first tab
-tabs["Players"].button.MouseButton1Click:Fire()
+activateTab("Players")
 
 -- ============== UPDATE FUNCTIONS ==============
 local function updatePlayersList()
